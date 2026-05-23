@@ -25,6 +25,9 @@ pub fn attach(iface: &str) -> Result<AttachedIface> {
     dnat_program.load().context("load dnat program")?;
     dnat_program
         .attach(iface, TcAttachType::Ingress)
+        .inspect_err(|err| {
+            eprintln!("failed to attach dnat program to {iface}: {err}");
+        })
         .with_context(|| format!("attach dnat to {iface}"))?;
 
     let snat_program: &mut SchedClassifier = snat_bpf
@@ -34,6 +37,9 @@ pub fn attach(iface: &str) -> Result<AttachedIface> {
     snat_program.load().context("load snat program")?;
     snat_program
         .attach(iface, TcAttachType::Egress)
+        .inspect_err(|err| {
+            eprintln!("failed to attach snat program to {iface}: {err}");
+        })
         .with_context(|| format!("attach snat to {iface}"))?;
 
     Ok(AttachedIface { dnat_bpf, snat_bpf })
