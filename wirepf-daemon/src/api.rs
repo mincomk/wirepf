@@ -137,18 +137,29 @@ async fn create_mapping(
     if inner.config.find_iface(&name).is_none() {
         return Err(ApiError::not_found(format!("interface {name}")));
     }
-    if inner
-        .config
-        .find_iface(&name)
-        .unwrap()
-        .mappings
-        .iter()
-        .any(|m| m.orig == mapping.orig)
-    {
+
+    if mapping.orig == mapping.new {
         return Err(ApiError::conflict(format!(
-            "mapping for {} already exists",
+            "orig and new must differ ({})",
             mapping.orig
         )));
+    }
+
+    for iface in &inner.config.interfaces {
+        for m in &iface.mappings {
+            if m.orig == mapping.orig {
+                return Err(ApiError::conflict(format!(
+                    "orig {} already mapped on interface {}",
+                    mapping.orig, iface.name
+                )));
+            }
+            if m.new == mapping.new {
+                return Err(ApiError::conflict(format!(
+                    "target {} already used by orig {} on interface {}",
+                    mapping.new, m.orig, iface.name
+                )));
+            }
+        }
     }
 
     let attached = inner
