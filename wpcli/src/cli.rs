@@ -11,6 +11,9 @@ pub struct Cli {
     #[arg(long, env = "WIREPF_TOKEN", global = true, hide_env_values = true)]
     pub token: Option<String>,
 
+    #[arg(long, env = "WIREPF_CONTEXT", global = true)]
+    pub context: Option<String>,
+
     #[arg(long, global = true)]
     pub config: Option<PathBuf>,
 
@@ -28,6 +31,8 @@ pub enum Command {
     Iface(IfaceCmd),
     #[command(subcommand)]
     Mapping(MappingCmd),
+    #[command(subcommand)]
+    Context(ContextCmd),
 }
 
 #[derive(Subcommand, Debug)]
@@ -50,5 +55,30 @@ pub enum MappingCmd {
     Delete {
         iface: String,
         orig: Ipv4Addr,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ContextCmd {
+    List,
+    Show {
+        name: Option<String>,
+    },
+    Add {
+        name: String,
+        #[arg(long)]
+        url: String,
+        #[arg(long, hide_env_values = true)]
+        token: Option<String>,
+    },
+    Delete {
+        name: String,
+    },
+    Use {
+        name: String,
+    },
+    Rename {
+        old: String,
+        new: String,
     },
 }

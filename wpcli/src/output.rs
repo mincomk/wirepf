@@ -1,3 +1,4 @@
+use crate::config::{Config, Context};
 use anyhow::Result;
 use comfy_table::{Cell, Table, presets::UTF8_FULL};
 use serde::Serialize;
@@ -77,6 +78,61 @@ impl Printer {
             }));
         }
         println!("deleted {kind} {id}");
+        Ok(())
+    }
+
+    pub fn contexts(&self, cfg: &Config) -> Result<()> {
+        if self.json {
+            return self.print_json(cfg);
+        }
+        if cfg.contexts.is_empty() {
+            println!("(no contexts)");
+            return Ok(());
+        }
+        let current = cfg.current.as_deref().unwrap_or("");
+        let mut table = Table::new();
+        table
+            .load_preset(UTF8_FULL)
+            .set_header(vec!["", "NAME", "URL", "TOKEN"]);
+        for (name, ctx) in &cfg.contexts {
+            let star = if name == current { "*" } else { "" };
+            let token = if ctx.token.is_some() { "***" } else { "-" };
+            table.add_row(vec![
+                Cell::new(star),
+                Cell::new(name),
+                Cell::new(&ctx.url),
+                Cell::new(token),
+            ]);
+        }
+        println!("{table}");
+        Ok(())
+    }
+
+    pub fn context(&self, name: &str, ctx: &Context, current: bool) -> Result<()> {
+        if self.json {
+            return self.print_json(&serde_json::json!({
+                "name": name,
+                "current": current,
+                "url": ctx.url,
+                "token": ctx.token,
+            }));
+        }
+        println!("name:    {name}{}", if current { " (current)" } else { "" });
+        println!("url:     {}", ctx.url);
+        println!(
+            "token:   {}",
+            if ctx.token.is_some() { "***" } else { "(none)" }
+        );
+        Ok(())
+    }
+
+    pub fn context_action(&self, action: &str, name: &str) -> Result<()> {
+        if self.json {
+            return self.print_json(&serde_json::json!({
+                "context": { "action": action, "name": name }
+            }));
+        }
+        println!("{action} context {name}");
         Ok(())
     }
 
