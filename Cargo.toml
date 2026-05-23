@@ -5,8 +5,9 @@ members = [
     "wirepf-common",
     "wirepf-dnat-ebpf",
     "wirepf-snat-ebpf",
+    "wpcli",
 ]
-default-members = ["wirepf-daemon", "wirepf-common"]
+default-members = ["wirepf-daemon", "wirepf-common", "wpcli"]
 
 [workspace.package]
 license = "MIT OR Apache-2.0"

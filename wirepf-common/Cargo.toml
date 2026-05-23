@@ -8,9 +8,11 @@ license.workspace = true
 [features]
 default = []
 user = ["aya"]
+dto = ["dep:serde"]
 
 [dependencies]
 aya = { workspace = true, optional = true }
+serde = { version = "1.0.228", default-features = false, features = ["derive", "alloc"], optional = true }
 
 [lib]
 path = "src/lib.rs"

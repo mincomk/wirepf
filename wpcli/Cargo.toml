@@ -1,0 +1,22 @@
+[package]
+name = "wpcli"
+version = "0.1.0"
+edition.workspace = true
+description = "Command-line client for the wirepf daemon REST API"
+license.workspace = true
+
+[[bin]]
+name = "wpcli"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap = { workspace = true, features = ["derive", "env", "help", "usage", "error-context", "suggestions"] }
+comfy-table = "7.2.2"
+dirs = "6.0.0"
+reqwest = { version = "0.13.3", default-features = false, features = ["rustls", "json"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+toml = "1.1.2"
+wirepf-common = { version = "0.1.0", path = "../wirepf-common", features = ["dto"] }

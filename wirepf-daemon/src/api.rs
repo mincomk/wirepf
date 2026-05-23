@@ -9,18 +9,15 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
-use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
+use wirepf_common::dto::{CreateIfaceBody, Health, IfaceView};
 
 pub fn router(state: AppState) -> Router {
     let mutating = Router::new()
         .route("/interfaces", post(create_iface))
         .route("/interfaces/{name}", delete(delete_iface))
         .route("/interfaces/{name}/mappings", post(create_mapping))
-        .route(
-            "/interfaces/{name}/mappings/{orig}",
-            delete(delete_mapping),
-        )
+        .route("/interfaces/{name}/mappings/{orig}", delete(delete_mapping))
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
 
     Router::new()
@@ -31,33 +28,20 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 
-#[derive(Serialize)]
-struct Health {
-    ok: bool,
-}
-
 async fn health() -> Json<Health> {
     Json(Health { ok: true })
 }
 
-#[derive(Serialize)]
-struct IfaceView {
-    name: String,
-    mappings: Vec<Mapping>,
-}
-
-impl From<&InterfaceCfg> for IfaceView {
-    fn from(c: &InterfaceCfg) -> Self {
-        Self {
-            name: c.name.clone(),
-            mappings: c.mappings.clone(),
-        }
+fn iface_view(c: &InterfaceCfg) -> IfaceView {
+    IfaceView {
+        name: c.name.clone(),
+        mappings: c.mappings.clone(),
     }
 }
 
 async fn list_ifaces(State(state): State<AppState>) -> Json<Vec<IfaceView>> {
     let inner = state.inner.lock().await;
-    Json(inner.config.interfaces.iter().map(Into::into).collect())
+    Json(inner.config.interfaces.iter().map(iface_view).collect())
 }
 
 async fn list_mappings(
@@ -70,11 +54,6 @@ async fn list_mappings(
         .find_iface(&name)
         .ok_or_else(|| ApiError::not_found(format!("interface {name}")))?;
     Ok(Json(iface.mappings.clone()))
-}
-
-#[derive(Deserialize)]
-struct CreateIfaceBody {
-    name: String,
 }
 
 async fn create_iface(
@@ -91,7 +70,7 @@ async fn create_iface(
     }
 
     let attached = bpf::attach(&body.name)
-        .map_err(|e| ApiError::internal(format!("attach {}: {e}", body.name)))?;
+        .map_err(|e| ApiError::internal(format!("attach {}: {:?}", body.name, e.to_string())))?;
     inner.attached.insert(body.name.clone(), attached);
 
     let cfg = InterfaceCfg {
@@ -102,9 +81,9 @@ async fn create_iface(
     inner
         .config
         .save_atomic(&state.config_path)
-        .map_err(|e| ApiError::internal(format!("save config: {e}")))?;
+        .map_err(|e| ApiError::internal(format!("save config: {}", e.to_string())))?;
 
-    Ok(Json((&cfg).into()))
+    Ok(Json(iface_view(&cfg)))
 }
 
 async fn delete_iface(

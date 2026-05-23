@@ -1,8 +1,9 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::net::Ipv4Addr;
 use std::path::Path;
+
+pub use wirepf_common::dto::{InterfaceCfg, Mapping};
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/wirepf.json";
 pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0:1204";
@@ -15,19 +16,6 @@ pub struct Config {
     pub bind_addr: Option<String>,
     #[serde(default)]
     pub interfaces: Vec<InterfaceCfg>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InterfaceCfg {
-    pub name: String,
-    #[serde(default)]
-    pub mappings: Vec<Mapping>,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub struct Mapping {
-    pub orig: Ipv4Addr,
-    pub new: Ipv4Addr,
 }
 
 impl Config {

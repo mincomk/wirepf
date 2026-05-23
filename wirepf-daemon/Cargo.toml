@@ -7,7 +7,7 @@ description = "eBPF-based DNAT/SNAT port forwarder daemon with a REST control AP
 license.workspace = true
 
 [dependencies]
-wirepf-common = { path = "../wirepf-common", features = ["user"] }
+wirepf-common = { path = "../wirepf-common", features = ["user", "dto"] }
 
 anyhow = { workspace = true, default-features = true }
 aya = { workspace = true }
