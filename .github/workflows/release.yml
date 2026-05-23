@@ -1,0 +1,82 @@
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to package (e.g. 0.2.0). Defaults to Cargo.toml version.'
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
+            V="${GITHUB_REF_NAME#v}"
+          elif [ -n "${{ inputs.version }}" ]; then
+            V="${{ inputs.version }}"
+          else
+            V="$(grep -m1 '^version' wirepf-daemon/Cargo.toml | cut -d'"' -f2)"
+          fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "Building wirepf $V"
+
+      - name: Sync Cargo.toml version
+        run: |
+          sed -i "0,/^version = .*/s//version = \"${{ steps.ver.outputs.version }}\"/" wirepf-daemon/Cargo.toml
+          grep -m1 '^version' wirepf-daemon/Cargo.toml
+
+      - name: Install Rust toolchains
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup toolchain install nightly --profile minimal --component rust-src
+          rustup target add x86_64-unknown-linux-musl
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-deb
+          cache-on-failure: true
+
+      - name: Install bpf-linker
+        run: |
+          which bpf-linker || cargo install bpf-linker --locked
+
+      - name: Install cargo-deb
+        run: |
+          which cargo-deb || cargo install cargo-deb --locked
+
+      - name: Build release binary (musl)
+        run: cargo build -p wirepf-daemon --release --target x86_64-unknown-linux-musl
+
+      - name: Package .deb
+        run: cargo deb -p wirepf-daemon --no-build --target x86_64-unknown-linux-musl
+
+      - name: Show artifact
+        run: ls -lh target/x86_64-unknown-linux-musl/debian/
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wirepf-${{ steps.ver.outputs.version }}-amd64-deb
+          path: target/x86_64-unknown-linux-musl/debian/wirepf_*.deb
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/x86_64-unknown-linux-musl/debian/wirepf_*.deb
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
