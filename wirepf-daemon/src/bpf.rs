@@ -79,13 +79,18 @@ pub fn remove_dnat(att: &mut AttachedIface, m: DnatMapping) -> Result<()> {
 pub fn insert_snat(att: &mut AttachedIface, m: SnatMapping) -> Result<()> {
     let orig_be = u32::from(m.orig).to_be();
     let new_be = u32::from(m.new).to_be();
+
     snat_table_mut(att)?.insert(orig_be, new_be, 0)?;
+    un_snat_table_mut(att)?.insert(new_be, orig_be, 0)?;
     Ok(())
 }
 
 pub fn remove_snat(att: &mut AttachedIface, m: SnatMapping) -> Result<()> {
     let orig_be = u32::from(m.orig).to_be();
+    let new_be = u32::from(m.new).to_be();
+
     let _ = snat_table_mut(att)?.remove(&orig_be);
+    let _ = un_snat_table_mut(att)?.remove(&new_be);
     Ok(())
 }
 
@@ -144,9 +149,19 @@ fn un_dnat_table_mut(
 
 fn snat_table_mut(att: &mut AttachedIface) -> Result<BpfHashMap<&mut aya::maps::MapData, u32, u32>> {
     Ok(BpfHashMap::try_from(
-        att.egress_bpf
+        att.ingress_bpf
             .map_mut("SNAT_TABLE")
             .ok_or_else(|| anyhow!("SNAT_TABLE map missing"))?,
+    )?)
+}
+
+fn un_snat_table_mut(
+    att: &mut AttachedIface,
+) -> Result<BpfHashMap<&mut aya::maps::MapData, u32, u32>> {
+    Ok(BpfHashMap::try_from(
+        att.egress_bpf
+            .map_mut("UN_SNAT_TABLE")
+            .ok_or_else(|| anyhow!("UN_SNAT_TABLE map missing"))?,
     )?)
 }
 

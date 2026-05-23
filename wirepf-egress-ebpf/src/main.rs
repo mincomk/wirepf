@@ -21,9 +21,11 @@ use network_types::{
 #[map]
 static UN_DNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
 
-// SNAT table: original src IP (network byte order) -> new src IP. Real 1:1 SNAT.
+// Un-SNAT table: SNAT'd new src IP (key) -> original src IP (value).
+// Populated automatically as the mirror of each ingress SNAT entry.
+// Lookup on egress is keyed on the packet's dst (return traffic for a SNAT'd flow).
 #[map]
-static SNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
+static UN_SNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
 
 // Masquerade source-CIDR set. Key is (prefix_len, addr_be). Value is presence marker (1).
 #[map]
@@ -64,75 +66,76 @@ fn try_egress(ctx: TcContext) -> Result<i32, ()> {
     }
     let ip: *mut Ipv4Hdr = ptr_at(&ctx, EthHdr::LEN)?;
 
-    // Read packet fields we need *before* any mutating helper.
     let old_src = u32::from_ne_bytes(unsafe { (*ip).src_addr });
+    let old_dst = u32::from_ne_bytes(unsafe { (*ip).dst_addr });
     let proto = unsafe { (*ip).proto() }.ok();
 
-    // 1) Un-DNAT (return path of a DNAT'd flow).
+    // --- src rewrites (mutually exclusive: at most one of un-DNAT or masquerade applies) ---
+    let mut src_rewritten = false;
+
+    // 1) Un-DNAT (return path of a DNAT'd flow): rewrite src to the original public IP.
     if let Some(&new_src) = unsafe { UN_DNAT_TABLE.get(&old_src) } {
-        return rewrite_src(&ctx, old_src, new_src, proto).map(|_| TC_ACT_OK);
+        rewrite_addr(&ctx, old_src, new_src, proto, offset_of!(Ipv4Hdr, src_addr))?;
+        src_rewritten = true;
     }
 
-    // 2) Real SNAT (configured 1:1 host IP -> host IP).
-    if let Some(&new_src) = unsafe { SNAT_TABLE.get(&old_src) } {
-        return rewrite_src(&ctx, old_src, new_src, proto).map(|_| TC_ACT_OK);
-    }
-
-    // 3) Masquerade (LPM-match on src against configured CIDRs; rewrite to iface IP).
-    let enabled = MASQ_ENABLED.get(0).map(|v| *v).unwrap_or(0);
-    if enabled != 0 {
-        // old_src is the in-packet u32 (already in network-byte-order memory layout).
-        // The LPM trie matches bits starting from byte 0 of `data`, which equals the
-        // first dotted-quad octet, so we pass the value through unchanged.
-        let key = Key::new(32, old_src);
-        if unsafe { MASQ_CIDRS.get(&key) }.is_some() {
-            let iface_ip = IFACE_IP.get(0).map(|v| *v).unwrap_or(0);
-            if iface_ip != 0 {
-                return rewrite_src(&ctx, old_src, iface_ip, proto).map(|_| TC_ACT_OK);
+    // 2) Masquerade: LPM-match the packet's src against the configured CIDRs;
+    //    if matched and enabled, rewrite src to the iface IP.
+    if !src_rewritten {
+        let enabled = MASQ_ENABLED.get(0).map(|v| *v).unwrap_or(0);
+        if enabled != 0 {
+            // old_src is the in-packet u32 (network-byte-order memory layout).
+            let key = Key::new(32, old_src);
+            if unsafe { MASQ_CIDRS.get(&key) }.is_some() {
+                let iface_ip = IFACE_IP.get(0).map(|v| *v).unwrap_or(0);
+                if iface_ip != 0 {
+                    rewrite_addr(&ctx, old_src, iface_ip, proto, offset_of!(Ipv4Hdr, src_addr))?;
+                }
             }
         }
+    }
+
+    // --- dst rewrites (independent of src rewrites) ---
+
+    // 3) Un-SNAT (return path of a SNAT'd flow): rewrite dst back to the original internal IP.
+    if let Some(&new_dst) = unsafe { UN_SNAT_TABLE.get(&old_dst) } {
+        rewrite_addr(&ctx, old_dst, new_dst, proto, offset_of!(Ipv4Hdr, dst_addr))?;
     }
 
     Ok(TC_ACT_OK)
 }
 
 #[inline(always)]
-fn rewrite_src(
+fn rewrite_addr(
     ctx: &TcContext,
-    old_src: u32,
-    new_src: u32,
+    old: u32,
+    new: u32,
     proto: Option<IpProto>,
+    addr_off_in_ip: usize,
 ) -> Result<(), ()> {
     let l3_off = EthHdr::LEN + offset_of!(Ipv4Hdr, check);
-    let src_off = EthHdr::LEN + offset_of!(Ipv4Hdr, src_addr);
+    let addr_off = EthHdr::LEN + addr_off_in_ip;
 
-    ctx.l3_csum_replace(l3_off, old_src as u64, new_src as u64, 4)
+    ctx.l3_csum_replace(l3_off, old as u64, new as u64, 4)
         .map_err(|_| ())?;
 
     match proto {
         Some(IpProto::Tcp) => {
             let l4_check_off = EthHdr::LEN + Ipv4Hdr::LEN + offset_of!(TcpHdr, check);
-            // 0x10 | 4 = BPF_F_PSEUDO_HDR | sizeof(src IP)
-            ctx.l4_csum_replace(l4_check_off, old_src as u64, new_src as u64, 0x10 | 4)
+            // 0x10 | 4 = BPF_F_PSEUDO_HDR | sizeof(IPv4 addr)
+            ctx.l4_csum_replace(l4_check_off, old as u64, new as u64, 0x10 | 4)
                 .map_err(|_| ())?;
         }
         Some(IpProto::Udp) => {
             let l4_check_off = EthHdr::LEN + Ipv4Hdr::LEN + offset_of!(UdpHdr, check);
-            // 0x10 | 0x20 | 4 = BPF_F_PSEUDO_HDR | BPF_F_MARK_MANGLED_0 | sizeof(src IP)
-            ctx.l4_csum_replace(
-                l4_check_off,
-                old_src as u64,
-                new_src as u64,
-                0x10 | 0x20 | 4,
-            )
-            .map_err(|_| ())?;
+            // 0x10 | 0x20 | 4 = BPF_F_PSEUDO_HDR | BPF_F_MARK_MANGLED_0 | sizeof(IPv4 addr)
+            ctx.l4_csum_replace(l4_check_off, old as u64, new as u64, 0x10 | 0x20 | 4)
+                .map_err(|_| ())?;
         }
         _ => {}
     }
 
-    ctx.store(src_off, &new_src.to_ne_bytes(), 0)
-        .map_err(|_| ())?;
-
+    ctx.store(addr_off, &new.to_ne_bytes(), 0).map_err(|_| ())?;
     Ok(())
 }
 

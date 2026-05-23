@@ -16,9 +16,13 @@ use network_types::{
     udp::UdpHdr,
 };
 
-// DNAT table: original dst IP (network byte order) -> new dst IP (network byte order)
+// DNAT: original dst IP (network byte order) -> new dst IP.
 #[map]
 static DNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
+
+// SNAT: original src IP (network byte order) -> new src IP.
+#[map]
+static SNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
 
 #[classifier]
 pub fn ingress(ctx: TcContext) -> i32 {
@@ -46,45 +50,55 @@ fn try_ingress(ctx: TcContext) -> Result<i32, ()> {
     }
     let ip: *mut Ipv4Hdr = ptr_at(&ctx, EthHdr::LEN)?;
 
+    let old_src = u32::from_ne_bytes(unsafe { (*ip).src_addr });
     let old_dst = u32::from_ne_bytes(unsafe { (*ip).dst_addr });
-    let proto = unsafe { (*ip).proto() };
+    let proto = unsafe { (*ip).proto() }.ok();
 
-    let new_dst = match unsafe { DNAT_TABLE.get(&old_dst) } {
-        Some(&v) => v,
+    // DNAT: rewrite dst if mapped.
+    if let Some(&new_dst) = unsafe { DNAT_TABLE.get(&old_dst) } {
+        rewrite_addr(&ctx, old_dst, new_dst, proto, offset_of!(Ipv4Hdr, dst_addr))?;
+    }
 
-        // No mapping for this dst IP: leave packet alone. This is the common case, so avoid doing
-        None => return Ok(TC_ACT_OK),
-    };
+    // SNAT: rewrite src if mapped. Independent of DNAT — touches a different field.
+    if let Some(&new_src) = unsafe { SNAT_TABLE.get(&old_src) } {
+        rewrite_addr(&ctx, old_src, new_src, proto, offset_of!(Ipv4Hdr, src_addr))?;
+    }
 
+    Ok(TC_ACT_OK)
+}
+
+#[inline(always)]
+fn rewrite_addr(
+    ctx: &TcContext,
+    old: u32,
+    new: u32,
+    proto: Option<IpProto>,
+    addr_off_in_ip: usize,
+) -> Result<(), ()> {
     let l3_off = EthHdr::LEN + offset_of!(Ipv4Hdr, check);
+    let addr_off = EthHdr::LEN + addr_off_in_ip;
 
-    ctx.l3_csum_replace(l3_off, old_dst as u64, new_dst as u64, 4)
+    ctx.l3_csum_replace(l3_off, old as u64, new as u64, 4)
         .map_err(|_| ())?;
 
     match proto {
-        Ok(IpProto::Tcp) => {
+        Some(IpProto::Tcp) => {
             let l4_check_off = EthHdr::LEN + Ipv4Hdr::LEN + offset_of!(TcpHdr, check);
-            ctx.l4_csum_replace(l4_check_off, old_dst as u64, new_dst as u64, 0x10 | 4)
+            // 0x10 | 4 = BPF_F_PSEUDO_HDR | sizeof(IPv4 addr)
+            ctx.l4_csum_replace(l4_check_off, old as u64, new as u64, 0x10 | 4)
                 .map_err(|_| ())?;
         }
-        Ok(IpProto::Udp) => {
+        Some(IpProto::Udp) => {
             let l4_check_off = EthHdr::LEN + Ipv4Hdr::LEN + offset_of!(UdpHdr, check);
-            ctx.l4_csum_replace(
-                l4_check_off,
-                old_dst as u64,
-                new_dst as u64,
-                0x10 | 0x20 | 4,
-            )
-            .map_err(|_| ())?;
+            // 0x10 | 0x20 | 4 = BPF_F_PSEUDO_HDR | BPF_F_MARK_MANGLED_0 | sizeof(IPv4 addr)
+            ctx.l4_csum_replace(l4_check_off, old as u64, new as u64, 0x10 | 0x20 | 4)
+                .map_err(|_| ())?;
         }
         _ => {}
     }
 
-    let dst_off = EthHdr::LEN + offset_of!(Ipv4Hdr, dst_addr);
-    ctx.store(dst_off, &new_dst.to_ne_bytes(), 0)
-        .map_err(|_| ())?;
-
-    Ok(TC_ACT_OK)
+    ctx.store(addr_off, &new.to_ne_bytes(), 0).map_err(|_| ())?;
+    Ok(())
 }
 
 #[cfg(not(test))]
