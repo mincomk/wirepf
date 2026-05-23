@@ -61,7 +61,8 @@ async fn main() -> anyhow::Result<()> {
                     inner.attached.insert(iface.name.clone(), attached);
                 }
                 Err(e) => {
-                    log::error!("failed to attach {}: {e}", iface.name);
+                    log::error!("failed to attach {}: {e:#}", iface.name);
+                    log::error!("attach error debug for {}: {e:?}", iface.name);
                 }
             }
         }
