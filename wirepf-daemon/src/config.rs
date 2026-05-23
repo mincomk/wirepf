@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-pub use wirepf_common::dto::{InterfaceCfg, Mapping};
+pub use wirepf_common::dto::{Cidr, DnatMapping, InterfaceCfg, MasqueradeCfg, SnatMapping};
 
 pub const DEFAULT_CONFIG_PATH: &str = "/etc/wirepf.json";
 pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0:1204";

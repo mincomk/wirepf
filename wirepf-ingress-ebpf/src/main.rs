@@ -21,8 +21,8 @@ use network_types::{
 static DNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
 
 #[classifier]
-pub fn dnat(ctx: TcContext) -> i32 {
-    match try_dnat(ctx) {
+pub fn ingress(ctx: TcContext) -> i32 {
+    match try_ingress(ctx) {
         Ok(ret) => ret,
         Err(_) => TC_ACT_OK,
     }
@@ -39,7 +39,7 @@ fn ptr_at<T>(ctx: &TcContext, offset: usize) -> Result<*mut T, ()> {
     Ok((start + offset) as *mut T)
 }
 
-fn try_dnat(ctx: TcContext) -> Result<i32, ()> {
+fn try_ingress(ctx: TcContext) -> Result<i32, ()> {
     let eth: *mut EthHdr = ptr_at(&ctx, 0)?;
     if unsafe { (*eth).ether_type() } != Ok(EtherType::Ipv4) {
         return Ok(TC_ACT_OK);

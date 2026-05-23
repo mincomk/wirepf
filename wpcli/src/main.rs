@@ -5,10 +5,11 @@ mod output;
 
 use anyhow::{Result, bail};
 use clap::Parser;
-use cli::{Cli, Command, ContextCmd, IfaceCmd, MappingCmd};
+use cli::{Cli, Command, ContextCmd, DnatCmd, IfaceCmd, MasqueradeCmd, SnatCmd};
 use client::Client;
 use config::{Config, Context};
 use output::Printer;
+use wirepf_common::dto::{Cidr, MasqueradeCfg};
 
 #[tokio::main]
 async fn main() {
@@ -40,15 +41,54 @@ async fn run(cli: Cli, printer: &Printer) -> Result<()> {
             client.delete_iface(&name).await?;
             printer.deleted("interface", &name)
         }
-        Command::Mapping(MappingCmd::List { iface }) => {
-            printer.mappings(&client.list_mappings(&iface).await?)
+        Command::Iface(IfaceCmd::RefreshIp { name }) => {
+            printer.iface(&client.refresh_iface_ip(&name).await?, "refreshed")
         }
-        Command::Mapping(MappingCmd::Add { iface, orig, new }) => {
-            printer.mapping(&client.add_mapping(&iface, orig, new).await?, "mapped")
+        Command::Dnat(DnatCmd::List { iface }) => {
+            printer.dnat_list(&client.list_dnat(&iface).await?)
         }
-        Command::Mapping(MappingCmd::Delete { iface, orig }) => {
-            client.delete_mapping(&iface, orig).await?;
-            printer.deleted("mapping", &format!("{iface}/{orig}"))
+        Command::Dnat(DnatCmd::Add { iface, orig, new }) => {
+            printer.dnat(&client.add_dnat(&iface, orig, new).await?, "mapped")
+        }
+        Command::Dnat(DnatCmd::Delete { iface, orig }) => {
+            client.delete_dnat(&iface, orig).await?;
+            printer.deleted("dnat", &format!("{iface}/{orig}"))
+        }
+        Command::Snat(SnatCmd::List { iface }) => {
+            printer.snat_list(&client.list_snat(&iface).await?)
+        }
+        Command::Snat(SnatCmd::Add { iface, orig, new }) => {
+            printer.snat(&client.add_snat(&iface, orig, new).await?, "mapped")
+        }
+        Command::Snat(SnatCmd::Delete { iface, orig }) => {
+            client.delete_snat(&iface, orig).await?;
+            printer.deleted("snat", &format!("{iface}/{orig}"))
+        }
+        Command::Masquerade(MasqueradeCmd::Show { iface }) => {
+            printer.masquerade(&client.get_masquerade(&iface).await?)
+        }
+        Command::Masquerade(MasqueradeCmd::Set {
+            iface,
+            enabled,
+            cidrs,
+        }) => {
+            let current = client.get_masquerade(&iface).await?;
+            let cfg = MasqueradeCfg {
+                enabled: enabled.unwrap_or(current.enabled),
+                src_cidrs: if cidrs.is_empty() {
+                    current.src_cidrs
+                } else {
+                    cidrs
+                        .into_iter()
+                        .map(|(addr, prefix_len)| Cidr { addr, prefix_len })
+                        .collect()
+                },
+            };
+            printer.masquerade(&client.put_masquerade(&iface, &cfg).await?)
+        }
+        Command::Masquerade(MasqueradeCmd::Clear { iface }) => {
+            let cfg = MasqueradeCfg::default();
+            printer.masquerade(&client.put_masquerade(&iface, &cfg).await?)
         }
     }
 }
@@ -146,7 +186,7 @@ fn resolve_show_name(
     {
         return Ok(n);
     }
-    cfg.current
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("no current context; pass a name or run `wpcli context use <name>`"))
+    cfg.current.clone().ok_or_else(|| {
+        anyhow::anyhow!("no current context; pass a name or run `wpcli context use <name>`")
+    })
 }

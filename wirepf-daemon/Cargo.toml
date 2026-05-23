@@ -2,7 +2,7 @@
 name = "wirepf-daemon"
 version = "0.1.0"
 edition.workspace = true
-description = "eBPF-based DNAT/SNAT port forwarder daemon with a REST control API"
+description = "eBPF-based DNAT/SNAT/MASQUERADE port forwarder daemon with a REST control API"
 
 license.workspace = true
 
@@ -27,6 +27,7 @@ clap = { workspace = true, features = ["derive"] }
 axum = "0.8.9"
 serde_json = "1.0.150"
 serde = { version = "1.0.228", features = ["derive"] }
+nix = { version = "0.31.3", features = ["net"] }
 [build-dependencies]
 anyhow = { workspace = true }
 aya-build = { workspace = true }
@@ -43,7 +44,8 @@ cargo_metadata = { workspace = true }
 # Finally note that *any* usage of `artifact = ...` in *any* Cargo.toml in the workspace breaks
 # workflows with stable cargo; stable cargo outright refuses to load manifests that use unstable
 # features.
-wirepf-dnat-ebpf = { path = "../wirepf-dnat-ebpf" }
+wirepf-ingress-ebpf = { path = "../wirepf-ingress-ebpf" }
+wirepf-egress-ebpf = { path = "../wirepf-egress-ebpf" }
 
 [[bin]]
 name = "wirepf"
@@ -54,7 +56,7 @@ name = "wirepf"
 maintainer = "Allen <mail@drchi.co.kr>"
 copyright = "2026, Allen"
 license-file = "../LICENSE"
-extended-description = "eBPF-based DNAT/SNAT port forwarder with a REST control API."
+extended-description = "eBPF-based DNAT/SNAT/MASQUERADE port forwarder with a REST control API."
 depends = "$auto"
 section = "net"
 priority = "optional"

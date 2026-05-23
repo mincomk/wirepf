@@ -1,5 +1,5 @@
 [package]
-name = "wirepf-snat-ebpf"
+name = "wirepf-egress-ebpf"
 version = "0.1.0"
 edition.workspace = true
 
@@ -14,5 +14,5 @@ network-types = "0.2.0"
 which = { workspace = true }
 
 [[bin]]
-name = "snat"
+name = "egress"
 path = "src/main.rs"

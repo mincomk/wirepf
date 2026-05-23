@@ -3,8 +3,8 @@ resolver = "2"
 members = [
     "wirepf-daemon",
     "wirepf-common",
-    "wirepf-dnat-ebpf",
-    "wirepf-snat-ebpf",
+    "wirepf-ingress-ebpf",
+    "wirepf-egress-ebpf",
     "wpcli",
 ]
 default-members = ["wirepf-daemon", "wirepf-common", "wpcli"]
@@ -32,7 +32,12 @@ log = { version = "0.4.22", default-features = false }
 tokio = { version = "1.40.0", default-features = false }
 which = { version = "6.0.0", default-features = false }
 
-[profile.release.package.wirepf-dnat-ebpf]
+[profile.release.package.wirepf-ingress-ebpf]
+debug = 2
+codegen-units = 1
+strip = false
+
+[profile.release.package.wirepf-egress-ebpf]
 debug = 2
 codegen-units = 1
 strip = false

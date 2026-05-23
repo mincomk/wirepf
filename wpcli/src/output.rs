@@ -2,7 +2,9 @@ use crate::config::{Config, Context};
 use anyhow::Result;
 use comfy_table::{Cell, Table, presets::UTF8_FULL};
 use serde::Serialize;
-use wirepf_common::dto::{Health, IfaceView, Mapping};
+use wirepf_common::dto::{
+    DnatMapping, Health, IfaceView, MasqueradeCfg, SnatMapping,
+};
 
 pub struct Printer {
     json: bool,
@@ -30,9 +32,28 @@ impl Printer {
             return Ok(());
         }
         let mut table = Table::new();
-        table.load_preset(UTF8_FULL).set_header(vec!["NAME", "MAPPINGS"]);
+        table.load_preset(UTF8_FULL).set_header(vec![
+            "NAME", "IFACE_IP", "DNAT", "SNAT", "MASQ",
+        ]);
         for i in ifaces {
-            table.add_row(vec![Cell::new(&i.name), Cell::new(i.mappings.len())]);
+            let ip = i
+                .iface_ip
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "-".into());
+            let masq = if i.masquerade.enabled {
+                format!("on ({} cidrs)", i.masquerade.src_cidrs.len())
+            } else if !i.masquerade.src_cidrs.is_empty() {
+                format!("off ({} cidrs)", i.masquerade.src_cidrs.len())
+            } else {
+                "off".into()
+            };
+            table.add_row(vec![
+                Cell::new(&i.name),
+                Cell::new(ip),
+                Cell::new(i.dnat.len()),
+                Cell::new(i.snat.len()),
+                Cell::new(masq),
+            ]);
         }
         println!("{table}");
         Ok(())
@@ -46,12 +67,12 @@ impl Printer {
         Ok(())
     }
 
-    pub fn mappings(&self, mappings: &[Mapping]) -> Result<()> {
+    pub fn dnat_list(&self, mappings: &[DnatMapping]) -> Result<()> {
         if self.json {
             return self.print_json(mappings);
         }
         if mappings.is_empty() {
-            println!("(no mappings)");
+            println!("(no dnat mappings)");
             return Ok(());
         }
         let mut table = Table::new();
@@ -63,11 +84,52 @@ impl Printer {
         Ok(())
     }
 
-    pub fn mapping(&self, m: &Mapping, action: &str) -> Result<()> {
+    pub fn dnat(&self, m: &DnatMapping, action: &str) -> Result<()> {
         if self.json {
             return self.print_json(m);
         }
-        println!("{action} {} -> {}", m.orig, m.new);
+        println!("{action} dnat {} -> {}", m.orig, m.new);
+        Ok(())
+    }
+
+    pub fn snat_list(&self, mappings: &[SnatMapping]) -> Result<()> {
+        if self.json {
+            return self.print_json(mappings);
+        }
+        if mappings.is_empty() {
+            println!("(no snat mappings)");
+            return Ok(());
+        }
+        let mut table = Table::new();
+        table.load_preset(UTF8_FULL).set_header(vec!["ORIG", "NEW"]);
+        for m in mappings {
+            table.add_row(vec![Cell::new(m.orig), Cell::new(m.new)]);
+        }
+        println!("{table}");
+        Ok(())
+    }
+
+    pub fn snat(&self, m: &SnatMapping, action: &str) -> Result<()> {
+        if self.json {
+            return self.print_json(m);
+        }
+        println!("{action} snat {} -> {}", m.orig, m.new);
+        Ok(())
+    }
+
+    pub fn masquerade(&self, cfg: &MasqueradeCfg) -> Result<()> {
+        if self.json {
+            return self.print_json(cfg);
+        }
+        println!("enabled: {}", cfg.enabled);
+        if cfg.src_cidrs.is_empty() {
+            println!("cidrs:   (none)");
+        } else {
+            println!("cidrs:");
+            for c in &cfg.src_cidrs {
+                println!("  {}/{}", c.addr, c.prefix_len);
+            }
+        }
         Ok(())
     }
 

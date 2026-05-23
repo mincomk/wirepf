@@ -30,7 +30,11 @@ pub enum Command {
     #[command(subcommand)]
     Iface(IfaceCmd),
     #[command(subcommand)]
-    Mapping(MappingCmd),
+    Dnat(DnatCmd),
+    #[command(subcommand)]
+    Snat(SnatCmd),
+    #[command(subcommand)]
+    Masquerade(MasqueradeCmd),
     #[command(subcommand)]
     Context(ContextCmd),
 }
@@ -40,10 +44,11 @@ pub enum IfaceCmd {
     List,
     Create { name: String },
     Delete { name: String },
+    RefreshIp { name: String },
 }
 
 #[derive(Subcommand, Debug)]
-pub enum MappingCmd {
+pub enum DnatCmd {
     List {
         iface: String,
     },
@@ -55,6 +60,39 @@ pub enum MappingCmd {
     Delete {
         iface: String,
         orig: Ipv4Addr,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum SnatCmd {
+    List {
+        iface: String,
+    },
+    Add {
+        iface: String,
+        orig: Ipv4Addr,
+        new: Ipv4Addr,
+    },
+    Delete {
+        iface: String,
+        orig: Ipv4Addr,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MasqueradeCmd {
+    Show {
+        iface: String,
+    },
+    Set {
+        iface: String,
+        #[arg(long, value_parser = parse_bool)]
+        enabled: Option<bool>,
+        #[arg(long = "cidr", value_parser = parse_cidr)]
+        cidrs: Vec<(Ipv4Addr, u8)>,
+    },
+    Clear {
+        iface: String,
     },
 }
 
@@ -81,4 +119,24 @@ pub enum ContextCmd {
         old: String,
         new: String,
     },
+}
+
+fn parse_bool(s: &str) -> Result<bool, String> {
+    match s.to_ascii_lowercase().as_str() {
+        "true" | "yes" | "y" | "1" | "on" => Ok(true),
+        "false" | "no" | "n" | "0" | "off" => Ok(false),
+        _ => Err(format!("expected true/false, got `{s}`")),
+    }
+}
+
+fn parse_cidr(s: &str) -> Result<(Ipv4Addr, u8), String> {
+    let (addr, prefix) = s
+        .split_once('/')
+        .ok_or_else(|| format!("expected a.b.c.d/n, got `{s}`"))?;
+    let addr: Ipv4Addr = addr.parse().map_err(|e| format!("bad address: {e}"))?;
+    let prefix: u8 = prefix.parse().map_err(|e| format!("bad prefix: {e}"))?;
+    if prefix > 32 {
+        return Err(format!("prefix {prefix} > 32"));
+    }
+    Ok((addr, prefix))
 }

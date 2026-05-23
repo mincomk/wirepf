@@ -7,35 +7,38 @@ fn main() -> anyhow::Result<()> {
         .exec()
         .context("MetadataCommand::exec")?;
 
-    let dnat_ebpf_package = packages
+    let ingress_ebpf_package = packages
         .iter()
-        .find(|cargo_metadata::Package { name, .. }| name.as_str() == "wirepf-dnat-ebpf")
-        .ok_or_else(|| anyhow!("wirepf-dnat-ebpf package not found"))?;
+        .find(|cargo_metadata::Package { name, .. }| name.as_str() == "wirepf-ingress-ebpf")
+        .ok_or_else(|| anyhow!("wirepf-ingress-ebpf package not found"))?;
 
-    let snat_ebpf_package = packages
+    let egress_ebpf_package = packages
         .iter()
-        .find(|cargo_metadata::Package { name, .. }| name.as_str() == "wirepf-snat-ebpf")
-        .ok_or_else(|| anyhow!("wirepf-snat-ebpf package not found"))?;
+        .find(|cargo_metadata::Package { name, .. }| name.as_str() == "wirepf-egress-ebpf")
+        .ok_or_else(|| anyhow!("wirepf-egress-ebpf package not found"))?;
 
-    let dnat_ebpf_package = aya_build::Package {
-        name: dnat_ebpf_package.name.as_str(),
-        root_dir: dnat_ebpf_package
+    let ingress_ebpf_package = aya_build::Package {
+        name: ingress_ebpf_package.name.as_str(),
+        root_dir: ingress_ebpf_package
             .manifest_path
             .parent()
-            .ok_or_else(|| anyhow!("no parent for {}", dnat_ebpf_package.manifest_path))?
+            .ok_or_else(|| anyhow!("no parent for {}", ingress_ebpf_package.manifest_path))?
             .as_str(),
         ..Default::default()
     };
 
-    let snat_ebpf_package = aya_build::Package {
-        name: snat_ebpf_package.name.as_str(),
-        root_dir: snat_ebpf_package
+    let egress_ebpf_package = aya_build::Package {
+        name: egress_ebpf_package.name.as_str(),
+        root_dir: egress_ebpf_package
             .manifest_path
             .parent()
-            .ok_or_else(|| anyhow!("no parent for {}", snat_ebpf_package.manifest_path))?
+            .ok_or_else(|| anyhow!("no parent for {}", egress_ebpf_package.manifest_path))?
             .as_str(),
         ..Default::default()
     };
 
-    aya_build::build_ebpf([dnat_ebpf_package, snat_ebpf_package], Toolchain::default())
+    aya_build::build_ebpf(
+        [ingress_ebpf_package, egress_ebpf_package],
+        Toolchain::default(),
+    )
 }

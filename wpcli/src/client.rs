@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, anyhow};
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use std::net::Ipv4Addr;
 use wirepf_common::dto::{
-    CreateIfaceBody, ErrorResponse, Health, IfaceView, Mapping,
+    CreateIfaceBody, DnatMapping, ErrorResponse, Health, IfaceView, MasqueradeCfg, SnatMapping,
 };
 
 pub struct Client {
@@ -42,12 +42,16 @@ impl Client {
     }
 
     pub async fn list_ifaces(&self) -> Result<Vec<IfaceView>> {
-        let resp = self.send(self.req(Method::GET, "/interfaces", false)?).await?;
+        let resp = self
+            .send(self.req(Method::GET, "/interfaces", false)?)
+            .await?;
         decode_json(resp).await
     }
 
     pub async fn create_iface(&self, name: &str) -> Result<IfaceView> {
-        let body = CreateIfaceBody { name: name.to_string() };
+        let body = CreateIfaceBody {
+            name: name.to_string(),
+        };
         let resp = self
             .send(self.req(Method::POST, "/interfaces", true)?.json(&body))
             .await?;
@@ -60,19 +64,25 @@ impl Client {
         decode_empty(resp).await
     }
 
-    pub async fn list_mappings(&self, iface: &str) -> Result<Vec<Mapping>> {
-        let path = format!("/interfaces/{}/mappings", urlencode(iface));
+    pub async fn refresh_iface_ip(&self, name: &str) -> Result<IfaceView> {
+        let path = format!("/interfaces/{}/refresh-ip", urlencode(name));
+        let resp = self.send(self.req(Method::POST, &path, true)?).await?;
+        decode_json(resp).await
+    }
+
+    pub async fn list_dnat(&self, iface: &str) -> Result<Vec<DnatMapping>> {
+        let path = format!("/interfaces/{}/dnat", urlencode(iface));
         let resp = self.send(self.req(Method::GET, &path, false)?).await?;
         decode_json(resp).await
     }
 
-    pub async fn add_mapping(
+    pub async fn add_dnat(
         &self,
         iface: &str,
         orig: Ipv4Addr,
         new: Ipv4Addr,
-    ) -> Result<Mapping> {
-        let path = format!("/interfaces/{}/mappings", urlencode(iface));
+    ) -> Result<DnatMapping> {
+        let path = format!("/interfaces/{}/dnat", urlencode(iface));
         let body = MappingBody { orig, new };
         let resp = self
             .send(self.req(Method::POST, &path, true)?.json(&body))
@@ -80,10 +90,54 @@ impl Client {
         decode_json(resp).await
     }
 
-    pub async fn delete_mapping(&self, iface: &str, orig: Ipv4Addr) -> Result<()> {
-        let path = format!("/interfaces/{}/mappings/{}", urlencode(iface), orig);
+    pub async fn delete_dnat(&self, iface: &str, orig: Ipv4Addr) -> Result<()> {
+        let path = format!("/interfaces/{}/dnat/{}", urlencode(iface), orig);
         let resp = self.send(self.req(Method::DELETE, &path, true)?).await?;
         decode_empty(resp).await
+    }
+
+    pub async fn list_snat(&self, iface: &str) -> Result<Vec<SnatMapping>> {
+        let path = format!("/interfaces/{}/snat", urlencode(iface));
+        let resp = self.send(self.req(Method::GET, &path, false)?).await?;
+        decode_json(resp).await
+    }
+
+    pub async fn add_snat(
+        &self,
+        iface: &str,
+        orig: Ipv4Addr,
+        new: Ipv4Addr,
+    ) -> Result<SnatMapping> {
+        let path = format!("/interfaces/{}/snat", urlencode(iface));
+        let body = MappingBody { orig, new };
+        let resp = self
+            .send(self.req(Method::POST, &path, true)?.json(&body))
+            .await?;
+        decode_json(resp).await
+    }
+
+    pub async fn delete_snat(&self, iface: &str, orig: Ipv4Addr) -> Result<()> {
+        let path = format!("/interfaces/{}/snat/{}", urlencode(iface), orig);
+        let resp = self.send(self.req(Method::DELETE, &path, true)?).await?;
+        decode_empty(resp).await
+    }
+
+    pub async fn get_masquerade(&self, iface: &str) -> Result<MasqueradeCfg> {
+        let path = format!("/interfaces/{}/masquerade", urlencode(iface));
+        let resp = self.send(self.req(Method::GET, &path, false)?).await?;
+        decode_json(resp).await
+    }
+
+    pub async fn put_masquerade(
+        &self,
+        iface: &str,
+        cfg: &MasqueradeCfg,
+    ) -> Result<MasqueradeCfg> {
+        let path = format!("/interfaces/{}/masquerade", urlencode(iface));
+        let resp = self
+            .send(self.req(Method::PUT, &path, true)?.json(cfg))
+            .await?;
+        decode_json(resp).await
     }
 
     fn req(&self, method: Method, path: &str, mutating: bool) -> Result<RequestBuilder> {

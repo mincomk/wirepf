@@ -30,16 +30,33 @@ async fn main() -> anyhow::Result<()> {
         for iface in ifaces {
             match bpf::attach(&iface.name) {
                 Ok(mut attached) => {
-                    log::info!("attached DNAT/SNAT on {}", iface.name);
-                    for m in &iface.mappings {
-                        if let Err(e) = bpf::insert_mapping(&mut attached, m.orig, m.new) {
+                    log::info!(
+                        "attached ingress+egress on {} (iface_ip={:?})",
+                        iface.name,
+                        attached.iface_ip,
+                    );
+                    for m in &iface.dnat {
+                        if let Err(e) = bpf::insert_dnat(&mut attached, *m) {
                             log::error!(
-                                "failed to insert mapping {} -> {} on {}: {e}",
+                                "failed to insert dnat {} -> {} on {}: {e}",
                                 m.orig,
                                 m.new,
                                 iface.name
                             );
                         }
+                    }
+                    for m in &iface.snat {
+                        if let Err(e) = bpf::insert_snat(&mut attached, *m) {
+                            log::error!(
+                                "failed to insert snat {} -> {} on {}: {e}",
+                                m.orig,
+                                m.new,
+                                iface.name
+                            );
+                        }
+                    }
+                    if let Err(e) = bpf::set_masquerade(&mut attached, &iface.masquerade) {
+                        log::error!("failed to set masquerade on {}: {e}", iface.name);
                     }
                     inner.attached.insert(iface.name.clone(), attached);
                 }
