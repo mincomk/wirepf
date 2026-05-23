@@ -16,16 +16,14 @@ use network_types::{
     udp::UdpHdr,
 };
 
-// Un-DNAT table: private src IP (network byte order) -> original public src IP.
+// Un-DNAT: private src IP (network byte order) -> original public src IP.
 // Populated automatically as the mirror of each ingress DNAT entry.
 #[map]
 static UN_DNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
 
-// Un-SNAT table: SNAT'd new src IP (key) -> original src IP (value).
-// Populated automatically as the mirror of each ingress SNAT entry.
-// Lookup on egress is keyed on the packet's dst (return traffic for a SNAT'd flow).
+// SNAT: original src IP (network byte order) -> new src IP. Real 1:1 SNAT.
 #[map]
-static UN_SNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
+static SNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
 
 // Masquerade source-CIDR set. Key is (prefix_len, addr_be). Value is presence marker (1).
 #[map]
@@ -81,46 +79,55 @@ fn try_egress(ctx: TcContext) -> Result<i32, ()> {
     let ip: *mut Ipv4Hdr = ptr_at(&ctx, ip_off)?;
 
     let old_src = u32::from_ne_bytes(unsafe { (*ip).src_addr });
-    let old_dst = u32::from_ne_bytes(unsafe { (*ip).dst_addr });
     let proto = unsafe { (*ip).proto() }.ok();
 
-    // --- src rewrites (mutually exclusive: at most one of un-DNAT or masquerade applies) ---
-    let mut src_rewritten = false;
-
-    // 1) Un-DNAT (return path of a DNAT'd flow): rewrite src to the original public IP.
+    // src rewrites are mutually exclusive — first match wins.
+    //
+    //   1) un-DNAT: return path of an ingress DNAT (most specific, paired with a DNAT entry).
+    //   2) SNAT:    configured 1:1 source rewrite.
+    //   3) MASQ:    LPM-match against configured source CIDRs; rewrite to the iface IP.
     if let Some(&new_src) = unsafe { UN_DNAT_TABLE.get(&old_src) } {
-        rewrite_addr(&ctx, ip_off, old_src, new_src, proto, offset_of!(Ipv4Hdr, src_addr))?;
-        src_rewritten = true;
+        return rewrite_addr(
+            &ctx,
+            ip_off,
+            old_src,
+            new_src,
+            proto,
+            offset_of!(Ipv4Hdr, src_addr),
+        )
+        .map(|_| TC_ACT_OK);
     }
 
-    // 2) Masquerade: LPM-match the packet's src against the configured CIDRs;
-    //    if matched and enabled, rewrite src to the iface IP.
-    if !src_rewritten {
-        let enabled = MASQ_ENABLED.get(0).map(|v| *v).unwrap_or(0);
-        if enabled != 0 {
-            // old_src is the in-packet u32 (network-byte-order memory layout).
-            let key = Key::new(32, old_src);
-            if unsafe { MASQ_CIDRS.get(&key) }.is_some() {
-                let iface_ip = IFACE_IP.get(0).map(|v| *v).unwrap_or(0);
-                if iface_ip != 0 {
-                    rewrite_addr(
-                        &ctx,
-                        ip_off,
-                        old_src,
-                        iface_ip,
-                        proto,
-                        offset_of!(Ipv4Hdr, src_addr),
-                    )?;
-                }
+    if let Some(&new_src) = unsafe { SNAT_TABLE.get(&old_src) } {
+        return rewrite_addr(
+            &ctx,
+            ip_off,
+            old_src,
+            new_src,
+            proto,
+            offset_of!(Ipv4Hdr, src_addr),
+        )
+        .map(|_| TC_ACT_OK);
+    }
+
+    let enabled = MASQ_ENABLED.get(0).map(|v| *v).unwrap_or(0);
+    if enabled != 0 {
+        // old_src is the in-packet u32 (network-byte-order memory layout).
+        let key = Key::new(32, old_src);
+        if unsafe { MASQ_CIDRS.get(&key) }.is_some() {
+            let iface_ip = IFACE_IP.get(0).map(|v| *v).unwrap_or(0);
+            if iface_ip != 0 {
+                return rewrite_addr(
+                    &ctx,
+                    ip_off,
+                    old_src,
+                    iface_ip,
+                    proto,
+                    offset_of!(Ipv4Hdr, src_addr),
+                )
+                .map(|_| TC_ACT_OK);
             }
         }
-    }
-
-    // --- dst rewrites (independent of src rewrites) ---
-
-    // 3) Un-SNAT (return path of a SNAT'd flow): rewrite dst back to the original internal IP.
-    if let Some(&new_dst) = unsafe { UN_SNAT_TABLE.get(&old_dst) } {
-        rewrite_addr(&ctx, ip_off, old_dst, new_dst, proto, offset_of!(Ipv4Hdr, dst_addr))?;
     }
 
     Ok(TC_ACT_OK)

@@ -62,7 +62,6 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Err(e) => {
                     log::error!("failed to attach {}: {e:#}", iface.name);
-                    log::error!("attach error debug for {}: {e:?}", iface.name);
                 }
             }
         }

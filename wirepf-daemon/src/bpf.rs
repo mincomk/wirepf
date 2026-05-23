@@ -149,7 +149,7 @@ fn un_dnat_table_mut(
 
 fn snat_table_mut(att: &mut AttachedIface) -> Result<BpfHashMap<&mut aya::maps::MapData, u32, u32>> {
     Ok(BpfHashMap::try_from(
-        att.ingress_bpf
+        att.egress_bpf
             .map_mut("SNAT_TABLE")
             .ok_or_else(|| anyhow!("SNAT_TABLE map missing"))?,
     )?)
@@ -159,7 +159,7 @@ fn un_snat_table_mut(
     att: &mut AttachedIface,
 ) -> Result<BpfHashMap<&mut aya::maps::MapData, u32, u32>> {
     Ok(BpfHashMap::try_from(
-        att.egress_bpf
+        att.ingress_bpf
             .map_mut("UN_SNAT_TABLE")
             .ok_or_else(|| anyhow!("UN_SNAT_TABLE map missing"))?,
     )?)

@@ -20,9 +20,11 @@ use network_types::{
 #[map]
 static DNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
 
-// SNAT: original src IP (network byte order) -> new src IP.
+// Un-SNAT: SNAT'd new src IP (key) -> original src IP (value).
+// Populated automatically as the mirror of each egress SNAT entry.
+// Lookup on ingress is keyed on the packet's dst (return traffic for a SNAT'd flow).
 #[map]
-static SNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
+static UN_SNAT_TABLE: HashMap<u32, u32> = HashMap::with_max_entries(1024, 0);
 
 #[classifier]
 pub fn ingress(ctx: TcContext) -> i32 {
@@ -74,18 +76,16 @@ fn try_ingress(ctx: TcContext) -> Result<i32, ()> {
     };
     let ip: *mut Ipv4Hdr = ptr_at(&ctx, ip_off)?;
 
-    let old_src = u32::from_ne_bytes(unsafe { (*ip).src_addr });
     let old_dst = u32::from_ne_bytes(unsafe { (*ip).dst_addr });
     let proto = unsafe { (*ip).proto() }.ok();
 
-    // DNAT: rewrite dst if mapped.
+    // dst rewrites: DNAT (port-forward) and un-SNAT (return path of an egress SNAT)
+    // are both keyed on the packet's dst. They are mutually exclusive — overlapping
+    // configuration would be a user-config bug. DNAT takes precedence.
     if let Some(&new_dst) = unsafe { DNAT_TABLE.get(&old_dst) } {
         rewrite_addr(&ctx, ip_off, old_dst, new_dst, proto, offset_of!(Ipv4Hdr, dst_addr))?;
-    }
-
-    // SNAT: rewrite src if mapped. Independent of DNAT — touches a different field.
-    if let Some(&new_src) = unsafe { SNAT_TABLE.get(&old_src) } {
-        rewrite_addr(&ctx, ip_off, old_src, new_src, proto, offset_of!(Ipv4Hdr, src_addr))?;
+    } else if let Some(&new_dst) = unsafe { UN_SNAT_TABLE.get(&old_dst) } {
+        rewrite_addr(&ctx, ip_off, old_dst, new_dst, proto, offset_of!(Ipv4Hdr, dst_addr))?;
     }
 
     Ok(TC_ACT_OK)
