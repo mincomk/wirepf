@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow};
 use aya::{
     Ebpf,
     maps::HashMap as BpfHashMap,
-    programs::{SchedClassifier, TcAttachType},
+    programs::{SchedClassifier, TcAttachType, tc},
 };
 use std::net::Ipv4Addr;
 
@@ -17,6 +17,8 @@ pub struct AttachedIface {
 pub fn attach(iface: &str) -> Result<AttachedIface> {
     let mut dnat_bpf = Ebpf::load(DNAT_BYTES).context("load dnat ebpf")?;
     let mut snat_bpf = Ebpf::load(SNAT_BYTES).context("load snat ebpf")?;
+
+    let _ = tc::qdisc_add_clsact(iface);
 
     let dnat_program: &mut SchedClassifier = dnat_bpf
         .program_mut("dnat")
