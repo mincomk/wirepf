@@ -62,13 +62,13 @@ fn ptr_at<T>(ctx: &TcContext, offset: usize) -> Result<*mut T, ()> {
 // Detect the IPv4 header offset within the packet. See ingress for rationale.
 #[inline(always)]
 fn ipv4_offset(ctx: &TcContext) -> Result<Option<usize>, ()> {
-    let first: *const u8 = ptr_at(ctx, 0)?;
-    if (unsafe { *first } >> 4) == 4 {
-        return Ok(Some(0));
-    }
     let eth: *mut EthHdr = ptr_at(ctx, 0)?;
     if unsafe { (*eth).ether_type() } == Ok(EtherType::Ipv4) {
-        Ok(Some(EthHdr::LEN))
+        return Ok(Some(EthHdr::LEN));
+    }
+    let first_byte = unsafe { *(eth as *const u8) };
+    if (first_byte >> 4) == 4 {
+        Ok(Some(0))
     } else {
         Ok(None)
     }

@@ -47,18 +47,22 @@ fn ptr_at<T>(ctx: &TcContext, offset: usize) -> Result<*mut T, ()> {
 //
 // L2-less interfaces (wg, tun, ipip, etc.) deliver packets that start
 // directly with the IPv4 header. Ethernet-like interfaces have a 14-byte
-// L2 header. The heuristic: if byte 0 looks like an IPv4 version+IHL byte
-// (high nibble == 4), assume no L2; otherwise parse an Ethernet header
-// and require the ethertype to be IPv4.
+// L2 header.
+//
+// We bounds-check 14 bytes once (Ethernet-header size). Both candidate
+// inspections — the ethertype at offset 12 and the IPv4 version+IHL byte
+// at offset 0 — live inside that verified region. A single 1-byte bounds
+// check would compile to `r4 >= r3`, which the kernel verifier does not
+// recognise as widening the readable range.
 #[inline(always)]
 fn ipv4_offset(ctx: &TcContext) -> Result<Option<usize>, ()> {
-    let first: *const u8 = ptr_at(ctx, 0)?;
-    if (unsafe { *first } >> 4) == 4 {
-        return Ok(Some(0));
-    }
     let eth: *mut EthHdr = ptr_at(ctx, 0)?;
     if unsafe { (*eth).ether_type() } == Ok(EtherType::Ipv4) {
-        Ok(Some(EthHdr::LEN))
+        return Ok(Some(EthHdr::LEN));
+    }
+    let first_byte = unsafe { *(eth as *const u8) };
+    if (first_byte >> 4) == 4 {
+        Ok(Some(0))
     } else {
         Ok(None)
     }
