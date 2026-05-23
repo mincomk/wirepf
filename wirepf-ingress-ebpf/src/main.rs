@@ -43,12 +43,32 @@ fn ptr_at<T>(ctx: &TcContext, offset: usize) -> Result<*mut T, ()> {
     Ok((start + offset) as *mut T)
 }
 
-fn try_ingress(ctx: TcContext) -> Result<i32, ()> {
-    let eth: *mut EthHdr = ptr_at(&ctx, 0)?;
-    if unsafe { (*eth).ether_type() } != Ok(EtherType::Ipv4) {
-        return Ok(TC_ACT_OK);
+// Detect the IPv4 header offset within the packet.
+//
+// L2-less interfaces (wg, tun, ipip, etc.) deliver packets that start
+// directly with the IPv4 header. Ethernet-like interfaces have a 14-byte
+// L2 header. The heuristic: if byte 0 looks like an IPv4 version+IHL byte
+// (high nibble == 4), assume no L2; otherwise parse an Ethernet header
+// and require the ethertype to be IPv4.
+#[inline(always)]
+fn ipv4_offset(ctx: &TcContext) -> Result<Option<usize>, ()> {
+    let first: *const u8 = ptr_at(ctx, 0)?;
+    if (unsafe { *first } >> 4) == 4 {
+        return Ok(Some(0));
     }
-    let ip: *mut Ipv4Hdr = ptr_at(&ctx, EthHdr::LEN)?;
+    let eth: *mut EthHdr = ptr_at(ctx, 0)?;
+    if unsafe { (*eth).ether_type() } == Ok(EtherType::Ipv4) {
+        Ok(Some(EthHdr::LEN))
+    } else {
+        Ok(None)
+    }
+}
+
+fn try_ingress(ctx: TcContext) -> Result<i32, ()> {
+    let Some(ip_off) = ipv4_offset(&ctx)? else {
+        return Ok(TC_ACT_OK);
+    };
+    let ip: *mut Ipv4Hdr = ptr_at(&ctx, ip_off)?;
 
     let old_src = u32::from_ne_bytes(unsafe { (*ip).src_addr });
     let old_dst = u32::from_ne_bytes(unsafe { (*ip).dst_addr });
@@ -56,12 +76,12 @@ fn try_ingress(ctx: TcContext) -> Result<i32, ()> {
 
     // DNAT: rewrite dst if mapped.
     if let Some(&new_dst) = unsafe { DNAT_TABLE.get(&old_dst) } {
-        rewrite_addr(&ctx, old_dst, new_dst, proto, offset_of!(Ipv4Hdr, dst_addr))?;
+        rewrite_addr(&ctx, ip_off, old_dst, new_dst, proto, offset_of!(Ipv4Hdr, dst_addr))?;
     }
 
     // SNAT: rewrite src if mapped. Independent of DNAT — touches a different field.
     if let Some(&new_src) = unsafe { SNAT_TABLE.get(&old_src) } {
-        rewrite_addr(&ctx, old_src, new_src, proto, offset_of!(Ipv4Hdr, src_addr))?;
+        rewrite_addr(&ctx, ip_off, old_src, new_src, proto, offset_of!(Ipv4Hdr, src_addr))?;
     }
 
     Ok(TC_ACT_OK)
@@ -70,26 +90,27 @@ fn try_ingress(ctx: TcContext) -> Result<i32, ()> {
 #[inline(always)]
 fn rewrite_addr(
     ctx: &TcContext,
+    ip_off: usize,
     old: u32,
     new: u32,
     proto: Option<IpProto>,
     addr_off_in_ip: usize,
 ) -> Result<(), ()> {
-    let l3_off = EthHdr::LEN + offset_of!(Ipv4Hdr, check);
-    let addr_off = EthHdr::LEN + addr_off_in_ip;
+    let l3_off = ip_off + offset_of!(Ipv4Hdr, check);
+    let addr_off = ip_off + addr_off_in_ip;
 
     ctx.l3_csum_replace(l3_off, old as u64, new as u64, 4)
         .map_err(|_| ())?;
 
     match proto {
         Some(IpProto::Tcp) => {
-            let l4_check_off = EthHdr::LEN + Ipv4Hdr::LEN + offset_of!(TcpHdr, check);
+            let l4_check_off = ip_off + Ipv4Hdr::LEN + offset_of!(TcpHdr, check);
             // 0x10 | 4 = BPF_F_PSEUDO_HDR | sizeof(IPv4 addr)
             ctx.l4_csum_replace(l4_check_off, old as u64, new as u64, 0x10 | 4)
                 .map_err(|_| ())?;
         }
         Some(IpProto::Udp) => {
-            let l4_check_off = EthHdr::LEN + Ipv4Hdr::LEN + offset_of!(UdpHdr, check);
+            let l4_check_off = ip_off + Ipv4Hdr::LEN + offset_of!(UdpHdr, check);
             // 0x10 | 0x20 | 4 = BPF_F_PSEUDO_HDR | BPF_F_MARK_MANGLED_0 | sizeof(IPv4 addr)
             ctx.l4_csum_replace(l4_check_off, old as u64, new as u64, 0x10 | 0x20 | 4)
                 .map_err(|_| ())?;

@@ -59,12 +59,26 @@ fn ptr_at<T>(ctx: &TcContext, offset: usize) -> Result<*mut T, ()> {
     Ok((start + offset) as *mut T)
 }
 
-fn try_egress(ctx: TcContext) -> Result<i32, ()> {
-    let eth: *mut EthHdr = ptr_at(&ctx, 0)?;
-    if unsafe { (*eth).ether_type() } != Ok(EtherType::Ipv4) {
-        return Ok(TC_ACT_OK);
+// Detect the IPv4 header offset within the packet. See ingress for rationale.
+#[inline(always)]
+fn ipv4_offset(ctx: &TcContext) -> Result<Option<usize>, ()> {
+    let first: *const u8 = ptr_at(ctx, 0)?;
+    if (unsafe { *first } >> 4) == 4 {
+        return Ok(Some(0));
     }
-    let ip: *mut Ipv4Hdr = ptr_at(&ctx, EthHdr::LEN)?;
+    let eth: *mut EthHdr = ptr_at(ctx, 0)?;
+    if unsafe { (*eth).ether_type() } == Ok(EtherType::Ipv4) {
+        Ok(Some(EthHdr::LEN))
+    } else {
+        Ok(None)
+    }
+}
+
+fn try_egress(ctx: TcContext) -> Result<i32, ()> {
+    let Some(ip_off) = ipv4_offset(&ctx)? else {
+        return Ok(TC_ACT_OK);
+    };
+    let ip: *mut Ipv4Hdr = ptr_at(&ctx, ip_off)?;
 
     let old_src = u32::from_ne_bytes(unsafe { (*ip).src_addr });
     let old_dst = u32::from_ne_bytes(unsafe { (*ip).dst_addr });
@@ -75,7 +89,7 @@ fn try_egress(ctx: TcContext) -> Result<i32, ()> {
 
     // 1) Un-DNAT (return path of a DNAT'd flow): rewrite src to the original public IP.
     if let Some(&new_src) = unsafe { UN_DNAT_TABLE.get(&old_src) } {
-        rewrite_addr(&ctx, old_src, new_src, proto, offset_of!(Ipv4Hdr, src_addr))?;
+        rewrite_addr(&ctx, ip_off, old_src, new_src, proto, offset_of!(Ipv4Hdr, src_addr))?;
         src_rewritten = true;
     }
 
@@ -89,7 +103,14 @@ fn try_egress(ctx: TcContext) -> Result<i32, ()> {
             if unsafe { MASQ_CIDRS.get(&key) }.is_some() {
                 let iface_ip = IFACE_IP.get(0).map(|v| *v).unwrap_or(0);
                 if iface_ip != 0 {
-                    rewrite_addr(&ctx, old_src, iface_ip, proto, offset_of!(Ipv4Hdr, src_addr))?;
+                    rewrite_addr(
+                        &ctx,
+                        ip_off,
+                        old_src,
+                        iface_ip,
+                        proto,
+                        offset_of!(Ipv4Hdr, src_addr),
+                    )?;
                 }
             }
         }
@@ -99,7 +120,7 @@ fn try_egress(ctx: TcContext) -> Result<i32, ()> {
 
     // 3) Un-SNAT (return path of a SNAT'd flow): rewrite dst back to the original internal IP.
     if let Some(&new_dst) = unsafe { UN_SNAT_TABLE.get(&old_dst) } {
-        rewrite_addr(&ctx, old_dst, new_dst, proto, offset_of!(Ipv4Hdr, dst_addr))?;
+        rewrite_addr(&ctx, ip_off, old_dst, new_dst, proto, offset_of!(Ipv4Hdr, dst_addr))?;
     }
 
     Ok(TC_ACT_OK)
@@ -108,26 +129,27 @@ fn try_egress(ctx: TcContext) -> Result<i32, ()> {
 #[inline(always)]
 fn rewrite_addr(
     ctx: &TcContext,
+    ip_off: usize,
     old: u32,
     new: u32,
     proto: Option<IpProto>,
     addr_off_in_ip: usize,
 ) -> Result<(), ()> {
-    let l3_off = EthHdr::LEN + offset_of!(Ipv4Hdr, check);
-    let addr_off = EthHdr::LEN + addr_off_in_ip;
+    let l3_off = ip_off + offset_of!(Ipv4Hdr, check);
+    let addr_off = ip_off + addr_off_in_ip;
 
     ctx.l3_csum_replace(l3_off, old as u64, new as u64, 4)
         .map_err(|_| ())?;
 
     match proto {
         Some(IpProto::Tcp) => {
-            let l4_check_off = EthHdr::LEN + Ipv4Hdr::LEN + offset_of!(TcpHdr, check);
+            let l4_check_off = ip_off + Ipv4Hdr::LEN + offset_of!(TcpHdr, check);
             // 0x10 | 4 = BPF_F_PSEUDO_HDR | sizeof(IPv4 addr)
             ctx.l4_csum_replace(l4_check_off, old as u64, new as u64, 0x10 | 4)
                 .map_err(|_| ())?;
         }
         Some(IpProto::Udp) => {
-            let l4_check_off = EthHdr::LEN + Ipv4Hdr::LEN + offset_of!(UdpHdr, check);
+            let l4_check_off = ip_off + Ipv4Hdr::LEN + offset_of!(UdpHdr, check);
             // 0x10 | 0x20 | 4 = BPF_F_PSEUDO_HDR | BPF_F_MARK_MANGLED_0 | sizeof(IPv4 addr)
             ctx.l4_csum_replace(l4_check_off, old as u64, new as u64, 0x10 | 0x20 | 4)
                 .map_err(|_| ())?;
